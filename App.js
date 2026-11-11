@@ -6,16 +6,16 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as IntentLauncher from 'expo-intent-launcher';
-import { PAIRS, SOURCES, fmt, steps, getPrices, customPrice } from './src/core';
+import { PAIRS, SOURCES, fmt, steps, getPrices, customPrice, activeStep } from './src/core';
 import * as monitor from './src/monitor';
-import { isServiceRunning } from './src/service';
+import { isServiceRunning, line as alarmLine } from './src/service';
 import { getDiag, openSetting } from './src/diag';
 import { createLoopSound, toneOf, DEFAULT_TONE } from './src/sound';
 
 // Distancia en pips del precio actual a la alarma (+ si la alarma está por encima). El pip es el 'micro' de steps().
 const pipsText = (pair, target, spot) => {
-  const d = (target - spot) / steps(pair)[1];
-  return `${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(1)} pips`;
+  const d = Math.round((target - spot) / steps(pair)[1]);
+  return `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)} pips`;
 };
 const DND = { 1: 'desactivado', 2: 'solo prioridad', 3: 'silencio total (bloquea alarmas)', 4: 'solo alarmas' };
 const fmtInt = (v) => (v >= 60 && v % 60 === 0 ? `${v / 60} m` : `${v} s`);
@@ -59,23 +59,23 @@ export default function App() {
   const saveAlarm = (data) => {
     setEditing(null);
     const cur = monitor.state.alarms;
-    const a = { ...data, enabled: true, fired: false };
+    const a = { ...data, enabled: true, fired: false, stage: 0 };
     monitor.setAlarms(data.id ? cur.map((x) => (x.id === data.id ? a : x)) : [...cur, { ...a, id: String(Date.now()) }]);
   };
-  const toggle = (id) => monitor.setAlarms(monitor.state.alarms.map((a) => (a.id === id ? { ...a, enabled: !a.enabled, fired: false } : a)));
+  const toggle = (id) => monitor.setAlarms(monitor.state.alarms.map((a) => (a.id === id ? { ...a, enabled: !a.enabled, fired: false, stage: 0 } : a)));
   const remove = (a) => Alert.alert(
     'Eliminar alarma',
-    `¿Seguro que quieres eliminar la alarma de ${a.pair} ${a.condition === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(a.pair, a.price)}? Esta acción no se puede deshacer.`,
+    `¿Seguro que quieres eliminar la alarma ${alarmLine(a)}? Esta acción no se puede deshacer.`,
     [{ text: 'Cancelar', style: 'cancel' },
      { text: 'Eliminar', style: 'destructive', onPress: () => { monitor.setAlarms(monitor.state.alarms.filter((x) => x.id !== a.id)); setEditing(null); } }],
   );
 
   const groups = useMemo(() => [...new Set(alarms.map((a) => a.pair))].sort().map((pair) => {
-    const items = alarms.filter((a) => a.pair === pair).sort((x, y) => y.price - x.price)
+    const items = alarms.filter((a) => a.pair === pair).sort((x, y) => activeStep(y).price - activeStep(x).price)
       .map((a) => ({ type: 'alarm', a }));
     const spot = prices[pair];
     if (spot != null) {
-      let i = items.findIndex((it) => it.a.price < spot);
+      let i = items.findIndex((it) => activeStep(it.a).price < spot);
       if (i < 0) i = items.length;
       items.splice(i, 0, { type: 'spot', price: spot });
     }
@@ -116,6 +116,22 @@ export default function App() {
               ) : (
                 <Pressable key={it.a.id} onPress={() => setEditing(it.a)}
                   style={[s.row, it.a.enabled && it.a.fired && { borderColor: C.danger }, !it.a.enabled && { opacity: 0.5 }]}>
+                  {it.a.then ? (
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.seqTag}>SECUENCIA · paso {it.a.stage === 1 ? 2 : 1} de 2</Text>
+                      {[[1, it.a.condition, it.a.price], [2, it.a.then.condition, it.a.then.price]].map(([n, c, p]) => {
+                        const active = n === (it.a.stage === 1 ? 2 : 1);
+                        return (
+                          <View key={n} style={{ flexDirection: 'row', alignItems: 'baseline', opacity: active ? 1 : 0.55 }}>
+                            <Text style={{ color: c === 'above' ? C.above : C.below, fontSize: 15 }}>{n === 1 ? '①' : '②'} {c === 'above' ? '▲' : '▼'} </Text>
+                            <Text style={[active ? s.price : s.priceSm, s.num]}>{fmt(pair, p)}</Text>
+                            {n === 1 && it.a.stage === 1 && <Text style={s.seqOk}> ✓</Text>}
+                            {active && prices[pair] != null && <Text style={[s.pips, s.num]}>{pipsText(pair, p, prices[pair])}</Text>}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  ) : (
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: it.a.condition === 'above' ? C.above : C.below, fontSize: 13 }}>
                       {it.a.condition === 'above' ? '▲ Por encima' : '▼ Por debajo'}
@@ -125,6 +141,7 @@ export default function App() {
                       {prices[pair] != null && <Text style={[s.pips, s.num]}>{pipsText(pair, it.a.price, prices[pair])}</Text>}
                     </View>
                   </View>
+                  )}
                   <Switch value={it.a.enabled} onValueChange={() => toggle(it.a.id)}
                     trackColor={{ true: C.spot, false: C.line }} thumbColor="#fff" />
                 </Pressable>
@@ -147,7 +164,7 @@ export default function App() {
           <Text style={s.ringTitle}>Alarma</Text>
           {ringing.map((a) => (
             <Text key={a.id} style={s.ringLine}>
-              {a.pair} {a.condition === 'above' ? '≥' : '≤'} {fmt(a.pair, a.price)}
+              {alarmLine(a)}
             </Text>
           ))}
           <Pressable style={s.ringBtn} onPress={monitor.dismiss}><Text style={s.ringBtnTxt}>Apagar alarma</Text></Pressable>
@@ -162,16 +179,30 @@ function AlarmModal({ alarm, prices, settings, onSave, onDelete, onClose }) {
   const { height: winH } = useWindowDimensions();
   const inputRef = useRef(null);
   const [pair, setPair] = useState('EUR/USD');
-  const [cond, setCond] = useState('above');
-  const [text, setText] = useState('');
+  // Un mismo formulario sirve para el paso 1 y, si hay secuencia, para el paso 2
+  const [two, setTwo] = useState(false);
+  const [step, setStep] = useState(1);
+  const [c1, setC1] = useState('above');
+  const [t1, setT1] = useState('');
+  const [c2, setC2] = useState('below');
+  const [t2, setT2] = useState('');
+  const cond = step === 1 ? c1 : c2;
+  const text = step === 1 ? t1 : t2;
+  const setCond = step === 1 ? setC1 : setC2;
+  const setText = step === 1 ? setT1 : setT2;
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!alarm) return;
     setOpen(false);
+    setStep(1);
     setPair(alarm.pair || 'EUR/USD');
-    setCond(alarm.condition || 'above');
-    setText(alarm.price != null ? fmt(alarm.pair, alarm.price) : '');
+    setC1(alarm.condition || 'above');
+    setT1(alarm.price != null ? fmt(alarm.pair, alarm.price) : '');
+    setTwo(!!alarm.then);
+    setC2(alarm.then ? alarm.then.condition : 'below');
+    setT2(alarm.then ? fmt(alarm.pair, alarm.then.price) : '');
   }, [alarm]);
+  const toggleTwo = (v) => { setTwo(v); setStep(v ? 2 : 1); if (v && !t2) setC2(c1 === 'above' ? 'below' : 'above'); };
 
   const num = parseFloat(text.replace(',', '.'));
   const [macro, micro] = steps(pair);
@@ -187,8 +218,11 @@ function AlarmModal({ alarm, prices, settings, onSave, onDelete, onClose }) {
     else Alert.alert('Sin precio', 'No se pudo obtener el precio actual de ' + pair + '.');
   };
   const save = () => {
-    if (!(num > 0)) return Alert.alert('Precio no válido', 'Introduce un precio objetivo mayor que 0.');
-    onSave({ id: alarm.id, pair, condition: cond, price: num });
+    const n1 = parseFloat(t1.replace(',', '.'));
+    const n2 = parseFloat(t2.replace(',', '.'));
+    if (!(n1 > 0)) return Alert.alert('Precio no válido', `Introduce un precio mayor que 0${two ? ' en el paso 1' : ''}.`);
+    if (two && !(n2 > 0)) return Alert.alert('Precio no válido', 'Introduce un precio mayor que 0 en el paso 2.');
+    onSave({ id: alarm.id, pair, condition: c1, price: n1, ...(two ? { then: { condition: c2, price: n2 } } : {}) });
   };
 
   const adj = [[-macro, '-'], [-micro, '-'], [micro, '+'], [macro, '+']];
@@ -217,6 +251,15 @@ function AlarmModal({ alarm, prices, settings, onSave, onDelete, onClose }) {
               ))}
             </View>
           )}
+          {two && (
+            <View style={s.seg}>
+              {[[1, '① Primero'], [2, '② Después']].map(([n, t]) => (
+                <Pressable key={n} onPress={() => setStep(n)} style={[s.segBtn, step === n && { backgroundColor: C.text }]}>
+                  <Text style={{ fontWeight: '700', color: step === n ? C.bg : C.muted }}>{t}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
           <View style={s.seg}>
             {[['above', 'POR ENCIMA', C.above], ['below', 'POR DEBAJO', C.below]].map(([k, t, col]) => (
               <Pressable key={k} onPress={() => setCond(k)}
@@ -237,6 +280,13 @@ function AlarmModal({ alarm, prices, settings, onSave, onDelete, onClose }) {
               <FitText style={s.spotTxt2} max={24} text={prices[pair] != null ? fmt(pair, prices[pair]) : 'Spot'} />
             </Pressable>
             {adj.slice(2).map(renderAdj)}
+          </View>
+          <View style={s.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: C.text, fontWeight: '700' }}>Secuencia (2 condiciones)</Text>
+              <Text style={s.note}>{two ? 'Salta cuando se cumpla ① y, más tarde, ②.' : 'Activa para exigir una segunda condición después de la primera.'}</Text>
+            </View>
+            <Switch value={two} onValueChange={toggleTwo} trackColor={{ true: C.spot, false: C.line }} thumbColor="#fff" />
           </View>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
             {alarm?.id && (
@@ -453,6 +503,10 @@ const s = StyleSheet.create({
   pair: { color: C.text, fontSize: 18, fontWeight: '800', marginBottom: 8 },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: C.line, marginVertical: 4 },
   pips: { color: C.muted, fontSize: 13, marginLeft: 10 },
+  seqTag: { color: C.spot, fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginBottom: 2 },
+  priceSm: { color: C.text, fontSize: 18, fontWeight: '700' },
+  seqOk: { color: C.spot, fontSize: 16 },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
   diagRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
   fixBtn: { borderWidth: 1, borderColor: C.danger, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, marginLeft: 8 },
   fixTxt: { color: C.danger, fontSize: 12, fontWeight: '700' },
