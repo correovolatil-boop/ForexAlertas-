@@ -11,7 +11,15 @@ const hhmm = (t) => {
   const d = new Date(t);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
-const line = (a) => (a.test ? 'PRUEBA de alarma' : `${a.pair} ${a.condition === 'above' ? '▲' : '▼'} ${fmt(a.pair, a.price)}`);
+const arrow = (c) => (c === 'above' ? '▲' : '▼');
+// Una línea por alarma: «EUR/USD ▲ 1.17000», o en secuencia «EUR/USD ▲ 1.17000 ✓ → ▼ 1.16500» (✓ = paso 1 cumplido)
+export const line = (a) => {
+  if (a.test) return 'PRUEBA de alarma';
+  const first = `${arrow(a.condition)} ${fmt(a.pair, a.price)}`;
+  return a.then
+    ? `${a.pair} ${first}${a.stage === 1 ? ' ✓' : ''} → ${arrow(a.then.condition)} ${fmt(a.pair, a.then.price)}`
+    : `${a.pair} ${first}`;
+};
 
 // Título: nº de alarmas activas y cuántas han saltado. Cuerpo: las que saltaron primero (⏰), luego el resto.
 export function describe(alarms) {

@@ -72,8 +72,13 @@ export async function tick(all = false) {
     if (feed.error !== lastErr) { log(feed.error ? `fuente: ERROR ${feed.error}` : 'fuente: OK'); lastErr = feed.error; }
     if (Object.keys(p).length) {
       state.prices = { ...state.prices, ...p };
-      const { alarms, fired } = checkAlarms(state.alarms, p);
-      if (fired.length) { fired.forEach((a) => log(`SALTA ${a.pair} ${a.condition === 'above' ? '≥' : '≤'} ${a.price} (precio ${p[a.pair]})`)); setAlarms(alarms); return; }
+      const { alarms, fired, advanced } = checkAlarms(state.alarms, p);
+      if (fired.length || advanced.length) {
+        advanced.forEach((a) => log(`PASO 1 cumplido ${a.pair} ${a.condition === 'above' ? '≥' : '≤'} ${a.price} (precio ${p[a.pair]}): espera el paso 2`));
+        fired.forEach((a) => { const t = a.then ?? a; log(`SALTA ${a.pair} ${t.condition === 'above' ? '≥' : '≤'} ${t.price} (precio ${p[a.pair]})`); });
+        setAlarms(alarms);
+        return;
+      }
     }
     emit();
   } finally { busy = false; }
@@ -113,13 +118,15 @@ export function setSettings(patch) {
 
 export function dismiss() {
   log('alarma apagada por el usuario');
-  setAlarms(state.alarms.filter((a) => !a.test).map((a) => (a.fired ? { ...a, fired: false, enabled: false } : a)));
+  setAlarms(state.alarms.filter((a) => !a.test).map((a) => (a.fired ? { ...a, fired: false, enabled: false, stage: 0 } : a)));
 }
 
 // Dispara una alarma de prueba pasados `sec` segundos, por el mismo camino que una real
 export function testAlarm(sec = 15) {
   const due = Date.now() + sec * 1000;
   log(`prueba: alarma de prueba a las ${hms(due)}`);
+  const waiting = { id: 'test-waiting', pair: 'EUR/USD', condition: 'above', price: 1, enabled: true, fired: false, test: true };
+  syncService([...state.alarms, waiting], log); // servicio vivo durante la espera, como con una alarma real
   setTimeout(() => {
     log(`prueba: disparando (retraso ${Date.now() - due} ms)`);
     setAlarms([...state.alarms, {

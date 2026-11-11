@@ -100,17 +100,28 @@ export async function getPrices(settings, pairs) {
   return out;
 }
 
-/** Marca como `fired` las alarmas activas cuya condición se cumple. */
+// Condición y precio que la alarma está esperando ahora (en una secuencia: el paso 1 o el 2 según `stage`)
+export const activeStep = (a) => (a.then && a.stage === 1 ? a.then : a);
+
+const reached = (step, px) => (step.condition === 'above' ? px >= step.price : px <= step.price);
+
+/** Marca como `fired` las alarmas activas cuya condición se cumple.
+ *  Las de secuencia (`then`) pasan al paso 2 (`stage: 1`) cuando se cumple el paso 1 y se queda «armado» aunque el
+ *  precio se aleje; el paso 2 se evalúa solo en consultas posteriores, así que siempre se cumplen en ese orden. */
 export function checkAlarms(alarms, prices) {
   const fired = [];
+  const advanced = [];
   const next = alarms.map((a) => {
     const px = prices[a.pair];
-    if (!a.enabled || a.fired || px == null) return a;
-    const hit = a.condition === 'above' ? px >= a.price : px <= a.price;
-    if (!hit) return a;
+    if (!a.enabled || a.fired || px == null || !reached(activeStep(a), px)) return a;
+    if (a.then && a.stage !== 1) {
+      const armed = { ...a, stage: 1 };
+      advanced.push(armed);
+      return armed;
+    }
     const f = { ...a, fired: true, firedAt: Date.now() };
     fired.push(f);
     return f;
   });
-  return { alarms: next, fired };
+  return { alarms: next, fired, advanced };
 }

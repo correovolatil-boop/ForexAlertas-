@@ -11,10 +11,11 @@ Notifications.setNotificationHandler({
 
 export async function notifyFired(fired) {
   for (const a of fired) {
+    const t = a.then ?? a; // en una secuencia salta con la condición del paso 2
     await Notifications.scheduleNotificationAsync({
       content: {
         title: `⏰ ${a.pair}`,
-        body: `Precio ${a.condition === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(a.pair, a.price)}`,
+        body: `Precio ${t.condition === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(a.pair, t.price)}`,
         sound: true,
         priority: Notifications.AndroidNotificationPriority.MAX,
       },
@@ -31,9 +32,9 @@ TaskManager.defineTask(TASK, async () => {
     const pending = alarms.filter((a) => a.enabled && !a.fired);
     if (!pending.length) return BackgroundFetch.BackgroundFetchResult.NoData;
     const prices = await getPrices(settings, [...new Set(pending.map((a) => a.pair))]);
-    const { alarms: next, fired } = checkAlarms(alarms, prices);
-    if (!fired.length) return BackgroundFetch.BackgroundFetchResult.NoData;
-    await saveAlarms(next);
+    const { alarms: next, fired, advanced } = checkAlarms(alarms, prices);
+    if (!fired.length && !advanced.length) return BackgroundFetch.BackgroundFetchResult.NoData;
+    await saveAlarms(next); // también el avance al paso 2 de una secuencia
     await notifyFired(fired);
     return BackgroundFetch.BackgroundFetchResult.NewData;
   } catch {
